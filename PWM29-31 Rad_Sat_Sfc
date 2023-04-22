@@ -1,0 +1,362 @@
+PWM Barograph 29-31 with sfc obs and looping radar, sat, and sfc analysis
+
+#Code produces and displays endless loop of baro, radar, and sat
+#baro has horizontal streak of old image
+#set up a function to draw in thicker lines each .25 on baro trace
+
+import smbus
+import requests
+from bs4 import BeautifulSoup
+import time #allows the sleep commands
+from time import strftime
+import datetime as dt
+from datetime import datetime
+import numpy as np
+import matplotlib.animation as animation
+from matplotlib.ticker import (MultipleLocator, FormatStrFormatter, AutoMinorLocator)
+from matplotlib import pyplot as plt
+from matplotlib import rcParams
+import matplotlib.dates as mdates
+import pandas as pd
+import json
+from io import BytesIO
+from PIL import Image
+#from matplotlib.use('Agg')
+
+rcParams['figure.figsize'] = 12,6
+
+# Create a figure for plotting
+fig = plt.figure()
+ax = fig.add_subplot(1, 1, 1)
+bx = fig.add_subplot(1, 1, 1)
+plt.axis('off')
+
+xs = []
+ys = []
+
+# This function is called periodically from FuncAnimation
+def animate(i, xs, ys):
+        
+    # Get I2C bus
+    bus = smbus.SMBus(1)
+    
+    # HP203B address, 0x77(118)
+    # Send OSR and channel setting command, 0x44(68)
+    bus.write_byte(0x77, 0x44 | 0x00)
+
+    time.sleep(0.5)
+
+    # HP203B address, 0x77(118)
+    # Read data back from 0x10(16), 6 bytes
+    # cTemp MSB, cTemp CSB, cTemp LSB, pressure MSB, pressure CSB, pressure LSB
+    data = bus.read_i2c_block_data(0x77, 0x10, 6)
+
+    # Convert the data to 20-bits
+    # Correct for 160 feet above sea level
+    # cpressure is pressure corrected for elevation
+    cTemp = (((data[0] & 0x0F) * 65536) + (data[1] * 256) + data[2]) / 100.00
+    fTemp = (cTemp * 1.8) + 32
+    pressure = (((data[3] & 0x0F) * 65536) + (data[4] * 256) + data[5]) / 100.00
+    cpressure = (pressure * 1.0058)
+    inHg = (cpressure * .029529)
+
+    # HP203B address, 0x77(118)
+    # Send OSR and channel setting command, 0x44(68)
+    bus.write_byte(0x77, 0x44 | 0x01)
+
+    time.sleep(0.5)
+
+    # HP203B address, 0x76(118)
+    # Read data back from 0x31(49), 3 bytes
+    # altitude MSB, altitude CSB, altitude LSB
+    data = bus.read_i2c_block_data(0x77, 0x31, 3)
+
+    # Convert the data to 20-bits
+    altitude = (((data[0] & 0x0F) * 65536) + (data[1] * 256) + data[2]) / 100.00
+    
+    if i > 1:
+        
+        plt.savefig('baro_trace.png')
+        
+        # Scrape and save the radar image
+        radar_url = 'https://radar.weather.gov/ridge/standard/KGYX_0.gif?_='
+        radar_response = requests.get(radar_url)
+        radar_content = radar_response.content
+        radar_image = Image.open(BytesIO(radar_content))
+        radar_image.save('radar.png', 'PNG')
+
+        # Scrape and save the satellite image
+        satellite_url = 'https://cdn.star.nesdis.noaa.gov/GOES16/ABI/SECTOR/eus/13/1000x1000.jpg?_='
+        satellite_response = requests.get(satellite_url)
+        satellite_content = satellite_response.content
+        satellite_image = Image.open(BytesIO(satellite_content))
+        satellite_image.save('satellite.png', 'PNG')
+        
+        # Scrape and save US sfc analysis
+        sfc_url = 'https://www.wpc.ncep.noaa.gov/basicwx/92fndfd.gif'
+        sfc_response = requests.get(sfc_url)
+        sfc_content = sfc_response.content
+        sfc_image = Image.open(BytesIO(sfc_content))
+        sfc_image.save('sfc.png', 'PNG')
+        
+        plt.pause(5)
+        ax.clear()
+        bx.clear()
+        
+        # Display the radar image in the subplot
+        radar_image = Image.open('radar.png')
+        bx.imshow(radar_image)
+        ax.axis('off')
+        bx.axis('off')
+        plt.draw()
+        plt.pause(2)
+
+        # Display the satellite image in the subplot
+        satellite_image = Image.open('satellite.png')
+        bx.imshow(satellite_image)
+        ax.axis('off')
+        bx.axis('off')
+        plt.draw()
+        plt.pause(2)
+        
+        # Display surface analysis in subplot
+        sfc_image = Image.open('sfc.png')
+        bx.imshow(sfc_image)
+        ax.axis('off')
+        bx.axis('off')
+        plt.draw()
+        plt.pause(2)
+
+    else:
+        pass
+  
+    try:        
+        
+        #Scrape for buoy data
+        url = "https://www.ndbc.noaa.gov/station_page.php?station=44007"        
+        html = requests.get(url)# requests instance    
+        time.sleep(5)    
+        soup = BeautifulSoup(html.text,'html.parser')   
+        
+        bwd = soup.find(class_="dataTable").find_all('td')[0]
+        bwd = bwd.string.split()[0]
+        
+        bws = soup.find(class_="dataTable").find_all('td')[1]
+        bws = float(bws.string) * 1.15078
+        bws = round(bws)
+        bws = " at {} mph".format(bws)
+
+        bwg = soup.find(class_="dataTable").find_all('td')[2]
+        bwg = round(float(bwg.string) * 1.15078)
+        bwg = " G{}".format(bwg)
+
+        bwind = bwd + bws + bwg
+        
+        owt = soup.find(class_="dataTable")
+        owt = owt.find_all('td')[10]
+        owt = owt.string
+        
+        if not "-" in owt:
+            owt = "Water Temp: " + str(round(float(owt.string))) + chr(176)
+            
+        else:
+            owt = "Water Temp: -"
+            pass
+        bat = soup.find(class_="dataTable")
+        bat = bat.find_all('td')[9]
+        bat = "Air Temp: " + str(round(float(bat.string))) + chr(176)
+                      
+    except Exception:
+        pass
+
+    #Get PWM temp and wind direction and speed from API
+    
+    url = "https://api.openweathermap.org/data/2.5/weather?lat=43.665&lon=-70.285&appid=1b984f87c129325db78a158fb15e8249&units=imperial"
+
+    try:        
+        pr = requests.get(url).json()
+        pws = pr['wind']['speed']
+        pwd = pr['wind']['deg']
+        ptemp = pr['main']['temp']
+        ptemp = round(ptemp)
+        ptemp = "{}{}".format(ptemp, chr(176))  # Use string formatting instead of concatenation
+        pws = round(pws)
+        pws = "{}{}".format(pws, " mph")  # Use string formatting instead of concatenation
+
+    except Exception:
+        pws = "--"
+        pwd = 361
+        #print('dodged one')
+        pass
+    
+    try:
+        pg = pr['wind']['gust']
+        pg = " G" + str(round(pg))
+
+    except Exception:
+        pg = ""
+        pass
+    
+    directions = ["N/NE", "NE", "E/NE", "E", "E/SE", "SE", "S/SE", "S", "S/SW", "SW", "W/SW", "W", "W/NW", "NW", "N/NW", "N"]
+    index = int(round(pwd / 22.5))
+    pcarwd = directions[index % 16]
+    pwind = pcarwd + " at " + pws + pg
+   
+    #Get MWN temp wind direction and speed from API
+    
+    murl = "https://w1.weather.gov/data/obhistory/KMWN.html"
+    try:
+        mhtml = requests.get(murl)# requests instance        
+        msoup = BeautifulSoup(mhtml.text,'html.parser')
+
+        mwindraw = msoup.find_all("td")[10]
+        mwindraw = mwindraw.string
+        mwd = mwindraw.split(" ", 3)[0]
+        mws = mwindraw.split(" ", 3)[1]
+        if "G" in mwindraw:
+            mwg = mwindraw.split(" ",3)[3]
+            mwg = "G" + mwg
+        else:
+            mwg = ""
+
+        mwind = mwd + " at " + mws + " mph " + mwg
+
+        mtemp = msoup.find_all("td")[14]
+        mtemp = mtemp.string
+        if mtemp == "-0":
+            mtemp = "0"
+        else:
+            mtemp = mtemp
+        mtemp = mtemp + chr(176)
+         
+    except Exception:
+        
+        pass
+    
+    # Get time stamp
+    now = datetime.now() # current date and time
+    year = now.strftime("%Y")
+    month = now.strftime("%m")
+    day = now.strftime("%d")
+    time_str = now.strftime("%H:%M:%S")
+    hourmin_str = now.strftime("%H:%M")
+    hms = now.strftime("%H:%M:%S")
+    day = now.strftime("%A")
+           
+    date_time = now.strftime("%m/%d/%Y, %H:%M:%S")
+    date_time = pd.to_datetime(date_time) #allows us to label x-axis
+
+    now = datetime.now() # current date and time
+    
+    sec = now.strftime("%S")
+    
+    dtext=date_time
+    #Build xs and ys arrays
+       
+    xs.append(date_time)
+    ys.append(inHg)
+    
+    #Limit x and y lists to 20 items
+    xs = xs[-2500:] #Adjust this neg number to how many obs plotted in one window
+    ys = ys[-2500:] #At a rate of 1 plot/min for 24 hours change this to 1440
+    #Draw x and y lists
+
+    ax.clear() 
+    ax.plot(xs, ys, 'r-')
+    try:
+        ax.text(.80, 1.09, "Portland",
+            transform=ax.transAxes,
+            fontweight='bold', horizontalalignment='left', fontsize=12)
+    
+        ax.text(.80, 1.05, ptemp,
+            transform=ax.transAxes,
+            fontweight='bold', horizontalalignment='left', fontsize=12)
+ 
+        ax.text(.80, 1.01, pwind,
+            transform=ax.transAxes,
+            fontweight='bold', horizontalalignment='left', fontsize=12)
+    
+    except Exception:
+        pass
+    
+    try:
+        
+        ax.text(.40, 1.09, "Mt. Washington",
+            transform=ax.transAxes,
+            fontweight='bold', horizontalalignment='left', fontsize=12)
+    
+        ax.text(.40, 1.05, mtemp,
+            transform=ax.transAxes,
+            fontweight='bold', horizontalalignment='left', fontsize=12)
+ 
+        ax.text(.40, 1.01, mwind,
+            transform=ax.transAxes,
+            fontweight='bold', horizontalalignment='left', fontsize=12)
+        
+    except Exception:
+        pass
+
+    try:
+        ax.text(0, 1.1, "Buoy 44007",
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=9)
+        
+        ax.text(0, 1.07, bat,
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=9)
+
+        ax.text(0, 1.04, owt,
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=9)
+        
+        ax.text(0, 1.01, bwind,
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=9)
+        
+    except Exception:
+        pass
+ 
+    #set up background colors
+    gold = 30.75
+    yellow = 30.35
+    white = 30.00
+    gainsboro = 29.65
+    darkgrey = 29.25
+        
+    ax.axhline(gold, color='gold', lw=77, alpha=.5)
+    ax.axhline(yellow, color='yellow', lw=46, alpha=.2)
+    ax.axhline(white, color='white', lw=40, alpha=.2)
+    ax.axhline(gainsboro, color='gainsboro', lw=46, alpha=.5)    
+    ax.axhline(darkgrey, color='darkgrey', lw=77, alpha=.5)
+    
+    #Lines on minor ticks
+    for t in np.arange(29, 31, 0.05):
+        ax.axhline(t, color='black', lw=.5, alpha=.2)
+    for u in np.arange(29, 31, 0.25):
+        ax.axhline(u, color='black', lw=.7)
+
+    ax.plot(xs, ys, 'r-')
+    plt.grid(True, color='.01',) #Draws default horiz and vert grid lines
+    plt.ylabel("Inches of Mercury")
+    #plt.title("Barometric Pressure")
+    plt.margins(0)
+    plt.ylim(29, 31)
+    
+    ax.xaxis.set(
+        major_locator=mdates.HourLocator((0,4,8,12,16,20)),
+        major_formatter=mdates.DateFormatter('%-I%P'),
+        minor_locator=mdates.DayLocator(),
+        minor_formatter=mdates.DateFormatter("\n%a,%-m/%-d"),
+    )
+   
+    ax.yaxis.set_minor_locator(AutoMinorLocator(5)) #Puts small ticks between labeled ticks
+    ax.yaxis.set_major_formatter(FormatStrFormatter('%2.2f'))
+    # disable removing overlapping locations
+    ax.xaxis.remove_overlapping_locs = False
+    print(i)
+    
+    
+# Set up plot to call animate() function periodically
+ani = animation.FuncAnimation(fig, animate, fargs=(xs, ys), interval=130000)
+ani.save('animation.gif', writer='pillow')
+
