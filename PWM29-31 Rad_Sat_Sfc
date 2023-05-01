@@ -1,8 +1,5 @@
-#PWM Barograph 29-31 with sfc obs and looping radar, sat, and sfc analysis
-
-#Code produces and displays endless loop of baro, radar, and sat
-#baro has horizontal streak of old image
-#set up a function to draw in thicker lines each .25 on baro trace
+#Code produces and displays endless loop of baro, radar, sat, sfc map
+#all zooms fixed
 
 import smbus
 import requests
@@ -22,6 +19,7 @@ import json
 from io import BytesIO
 from PIL import Image
 #from matplotlib.use('Agg')
+import matplotlib.image as mpimg
 
 rcParams['figure.figsize'] = 12,6
 
@@ -76,17 +74,50 @@ def animate(i, xs, ys):
     
     if i > 1:
         
+        ax.xaxis.set(
+        major_locator=mdates.HourLocator((0,4,8,12,16,20)),
+        major_formatter=mdates.DateFormatter('%-I%P'),
+        minor_locator=mdates.DayLocator(),
+        minor_formatter=mdates.DateFormatter("\n%a,%-m/%-d"),
+    )
+        ax.grid(which='major', axis='both', linestyle='-', linewidth=1, color='black', alpha=1, zorder=10)
+        
+        ax.tick_params(axis='x', direction='inout', length=10, width=1, color='black')
+        
         plt.savefig('baro_trace.png')
         
-        # Scrape and save the radar image
-        radar_url = 'https://radar.weather.gov/ridge/standard/KGYX_0.gif?_='
+        # Scrape and save the regional composite radar image
+        radar_url = 'https://radar.weather.gov/ridge/standard/NORTHEAST_0.gif'
         radar_response = requests.get(radar_url)
         radar_content = radar_response.content
         radar_image = Image.open(BytesIO(radar_content))
         radar_image.save('radar.png', 'PNG')
+        
+        # Scrape and save zoomed in GYX radar image
+        gyx_url = 'https://radar.weather.gov/ridge/standard/KGYX_0.gif'
+        gyx_response = requests.get(gyx_url)
+        gyx_content = gyx_response.content
+        # open image and crop to center
+        gyx_img = Image.open(BytesIO(gyx_response.content))
+        width, height = gyx_img.size
+        left = (width / 4) - 150  # adjust to zoom in further west
+        top = (height / 4) + 70  # adjust to zoom in further south
+        right = 3 * (width / 4) + 102  # adjust to zoom in further west
+        bottom = 3 * (height / 4) + 150  # adjust to zoom in further south
+        gyx_img_cropped = gyx_img.crop((left, top, right, bottom))
+
+        # resize image by factor of 2
+        width, height = gyx_img_cropped.size
+        gyx_img_resized = gyx_img_cropped.resize((2 * width, 2 * height))
+
+        # display image
+        #img_resized.show()
+        
+        # save image to file
+        gyx_img_resized.save('gyx.png', 'PNG')
 
         # Scrape and save the satellite image
-        satellite_url = 'https://cdn.star.nesdis.noaa.gov/GOES16/ABI/SECTOR/eus/13/1000x1000.jpg?_='
+        satellite_url = 'https://cdn.star.nesdis.noaa.gov/GOES16/ABI/SECTOR/eus/GEOCOLOR/1000x1000.jpg'
         satellite_response = requests.get(satellite_url)
         satellite_content = satellite_response.content
         satellite_image = Image.open(BytesIO(satellite_content))
@@ -96,28 +127,45 @@ def animate(i, xs, ys):
         sfc_url = 'https://www.wpc.ncep.noaa.gov/basicwx/92fndfd.gif'
         sfc_response = requests.get(sfc_url)
         sfc_content = sfc_response.content
+        # open image and crop to center
         sfc_image = Image.open(BytesIO(sfc_content))
+
+        # save image to file
         sfc_image.save('sfc.png', 'PNG')
         
-        plt.pause(5)
+        # Pause for 2 seconds
+        plt.pause(5)    
+        
+        #plt.pause(5)
         ax.clear()
         bx.clear()
         
-        # Display the radar image in the subplot
+        # Turn off the margins
+        fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+        
+        # Display the regional composite radar image in the subplot
         radar_image = Image.open('radar.png')
         bx.imshow(radar_image)
         ax.axis('off')
         bx.axis('off')
         plt.draw()
-        plt.pause(2)
-
-        # Display the satellite image in the subplot
-        satellite_image = Image.open('satellite.png')
-        bx.imshow(satellite_image)
+        plt.pause(5)
+        
+        # Display GYX radar in the subplot
+        gyx_image = Image.open('gyx.png')
+        bx.imshow(gyx_image)
         ax.axis('off')
         bx.axis('off')
         plt.draw()
-        plt.pause(2)
+        plt.pause(5)
+
+        # Display the satellite image in the subplot
+        satellite_image = Image.open('satellite.png')
+        bx.imshow(satellite_image, aspect='equal')
+        ax.axis('off')
+        bx.axis('off')
+        plt.draw()
+        plt.pause(5)
         
         # Display surface analysis in subplot
         sfc_image = Image.open('sfc.png')
@@ -125,7 +173,12 @@ def animate(i, xs, ys):
         ax.axis('off')
         bx.axis('off')
         plt.draw()
-        plt.pause(2)
+        plt.pause(5)
+        bx.clear()
+        bx.axis('off')
+        
+        # Set custom margins
+        fig.subplots_adjust(left=0.125, right=0.9, bottom=0.11, top=0.88)
 
     else:
         pass
@@ -323,6 +376,14 @@ def animate(i, xs, ys):
     gainsboro = 29.65
     darkgrey = 29.25
         
+    # Lengthen tick marks
+    for tick in ax.xaxis.get_major_ticks():
+        tick.tick1line.set_markersize(5)
+        tick.tick2line.set_markersize(5)
+    for tick in ax.xaxis.get_minor_ticks():
+        tick.tick1line.set_markersize(2)
+        tick.tick2line.set_markersize(2)
+        
     ax.axhline(gold, color='gold', lw=77, alpha=.5)
     ax.axhline(yellow, color='yellow', lw=46, alpha=.2)
     ax.axhline(white, color='white', lw=40, alpha=.2)
@@ -334,29 +395,33 @@ def animate(i, xs, ys):
         ax.axhline(t, color='black', lw=.5, alpha=.2)
     for u in np.arange(29, 31, 0.25):
         ax.axhline(u, color='black', lw=.7)
+        
+    ax.tick_params(axis='x', direction='inout', length=10, width=1, color='black')
+    
 
+    ax.set_ylim(29, 31)
+    
     ax.plot(xs, ys, 'r-')
     plt.grid(True, color='.01',) #Draws default horiz and vert grid lines
     plt.ylabel("Inches of Mercury")
     #plt.title("Barometric Pressure")
-    plt.margins(0)
-    plt.ylim(29, 31)
-    
-    ax.xaxis.set(
-        major_locator=mdates.HourLocator((0,4,8,12,16,20)),
-        major_formatter=mdates.DateFormatter('%-I%P'),
-        minor_locator=mdates.DayLocator(),
-        minor_formatter=mdates.DateFormatter("\n%a,%-m/%-d"),
-    )
-   
+      
     ax.yaxis.set_minor_locator(AutoMinorLocator(5)) #Puts small ticks between labeled ticks
     ax.yaxis.set_major_formatter(FormatStrFormatter('%2.2f'))
     # disable removing overlapping locations
     ax.xaxis.remove_overlapping_locs = False
     print(i)
     
+    ax.xaxis.set(
+    major_locator=mdates.HourLocator((0,4,8,12,16,20)),
+    major_formatter=mdates.DateFormatter('%-I%P'),
+    minor_locator=mdates.DayLocator(),
+    minor_formatter=mdates.DateFormatter("\n%a,%-m/%-d"),
+)
+   
+    ax.grid(which='major', axis='both', linestyle='-', linewidth=1, color='black', alpha=1, zorder=10)
+    plt.show(block=False)
     
 # Set up plot to call animate() function periodically
-ani = animation.FuncAnimation(fig, animate, fargs=(xs, ys), interval=130000)
+ani = animation.FuncAnimation(fig, animate, fargs=(xs, ys), interval=135000)
 ani.save('animation.gif', writer='pillow')
-
