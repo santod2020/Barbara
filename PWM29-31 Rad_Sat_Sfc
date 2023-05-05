@@ -1,5 +1,6 @@
 #Code produces and displays endless loop of baro, radar, sat, sfc map
 #all zooms fixed
+#PWM scraped instead of API
 
 import smbus
 import requests
@@ -222,38 +223,26 @@ def animate(i, xs, ys):
     except Exception:
         pass
 
-    #Get PWM temp and wind direction and speed from API
+    #Get PWM temp and wind direction and speed scraped from NWS site
     
-    url = "https://api.openweathermap.org/data/2.5/weather?lat=43.665&lon=-70.285&appid=1b984f87c129325db78a158fb15e8249&units=imperial"
+    url = 'https://forecast.weather.gov/MapClick.php?lon=-70.2685546875&lat=43.65177365401155'
 
     try:        
-        pr = requests.get(url).json()
-        pws = pr['wind']['speed']
-        pwd = pr['wind']['deg']
-        ptemp = pr['main']['temp']
-        ptemp = round(ptemp)
-        ptemp = "{}{}".format(ptemp, chr(176))  # Use string formatting instead of concatenation
-        pws = round(pws)
-        pws = "{}{}".format(pws, " mph")  # Use string formatting instead of concatenation
+        # Send a GET request to the website and store the response in a variable
+        phtml = requests.get(purl)
 
-    except Exception:
-        pws = "--"
-        pwd = 361
-        #print('dodged one')
-        pass
-    
-    try:
-        pg = pr['wind']['gust']
-        pg = " G" + str(round(pg))
+        # Parse the HTML content of the website using BeautifulSoup
+        psoup = BeautifulSoup(phtml.content, 'html.parser')
 
+        # Find the current temperature, wind direction, and wind speed
+        ptemp = psoup.find('p', class_='myforecast-current-lrg').text
+        ptemp = ptemp[:-1]
+
+        pwind = psoup.find(id='current_conditions_detail')('td')[3]
+        pwind = pwind.string
+        
     except Exception:
-        pg = ""
         pass
-    
-    directions = ["N/NE", "NE", "E/NE", "E", "E/SE", "SE", "S/SE", "S", "S/SW", "SW", "W/SW", "W", "W/NW", "NW", "N/NW", "N"]
-    index = int(round(pwd / 22.5))
-    pcarwd = directions[index % 16]
-    pwind = pcarwd + " at " + pws + pg
    
     #Get MWN temp wind direction and speed from API
     
