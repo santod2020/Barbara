@@ -225,7 +225,7 @@ def animate(i, xs, ys):
 
     #Get PWM temp and wind direction and speed scraped from NWS site
     
-    url = 'https://forecast.weather.gov/MapClick.php?lon=-70.2685546875&lat=43.65177365401155'
+    purl = 'https://forecast.weather.gov/MapClick.php?lon=-70.2685546875&lat=43.65177365401155'
 
     try:        
         # Send a GET request to the website and store the response in a variable
