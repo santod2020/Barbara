@@ -1,5 +1,5 @@
 # Code produces and displays endless loop of baro, radar, sat, sfc map, sounding
-# rolling drum effect. Set to 4200 (about 2.5 days) on lines 471, 486, 487, and 588
+# rolling drum effect. Set to 4200 on lines 471, 486, 487, and 588
 # Ran from 5/11 - 6/17/23. Error unknown, so added many print error statements, add specifics 6/26/23
 # Include code to accept user input
 # use location for nearest NWS and scrape latest baro reading to get correction factor
@@ -91,7 +91,7 @@ if location is not None:
     nearest_baro = nearest_soup.find(id='current_conditions_detail')('td')[5]
     baro_input = nearest_baro.string
     baro_input = float(baro_input[:5])
-    print(baro_input)
+    print("{:.2f}".format(baro_input))
 
 else:
     print("Failed to retrieve location.")
@@ -324,7 +324,6 @@ def animate(i, xs, ys):
                 bx.axis('off')
                 plt.draw()
                 plt.pause(7)
-                bx.clear()
             else:
                 pass
         except Exception as e:
@@ -366,13 +365,10 @@ def animate(i, xs, ys):
             sound_img = sound_img.crop(crop_box)
             
             sound_img.save('sound.png', 'PNG')
-                
-        except Exception as e:
-            print("Sounding", e)
-            pass
         
             # Pause for 2 seconds include this time when showing baro
-            plt.pause(2) 
+            plt.pause(2)
+        
             if sound_response.status_code == 200:
                 sound_img = Image.open('sound.png')
                 
@@ -394,6 +390,8 @@ def animate(i, xs, ys):
                 sound_img_with_white_bg.save('sound_img.png', 'PNG')
 
                 # Display the image with the adjusted extent
+                ax.axis('off')
+                bx.axis('off') 
                 bx.imshow(sound_img_with_white_bg, extent=display_extent)
            
                 # Add the text to the subplot
