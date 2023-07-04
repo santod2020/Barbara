@@ -1,0 +1,655 @@
+# Code produces and displays endless loop of baro, radar, sat, sfc map, sounding
+# rolling drum effect. Set to 4200 (about 2.5 days) on lines 471, 486, 487, and 588
+# Ran from 5/11 - 6/17/23. Error unknown, so added many print error statements, add specifics 6/26/23
+# Include code to accept user input
+# use location for nearest NWS and scrape latest baro reading to get correction factor
+# looping local radar
+# Prints out the locaton of determined nearest obs site and current baro
+
+import smbus
+import requests
+from bs4 import BeautifulSoup
+import time #allows the sleep commands
+from time import strftime
+import datetime as dt
+from datetime import datetime, timedelta
+import numpy as np
+import matplotlib
+matplotlib.use('TkAgg')
+import matplotlib.animation as animation
+from matplotlib.ticker import (MultipleLocator, FormatStrFormatter, AutoMinorLocator)
+from matplotlib import pyplot as plt
+from matplotlib import rcParams
+import matplotlib.dates as mdates
+import pandas as pd
+import json
+from io import BytesIO
+from PIL import Image
+import matplotlib.image as mpimg
+import traceback
+from PIL import Image, ImageDraw, ImageFont
+import re
+import imageio
+from matplotlib.animation import FuncAnimation
+
+
+rcParams['figure.figsize'] = 12,6
+
+# Create a figure for plotting
+light_blue = (0.8, 0.9, 1.0)
+fig = plt.figure(facecolor=light_blue)
+ax = fig.add_subplot(1, 1, 1)
+bx = fig.add_subplot(1, 1, 1, label="unique_label")
+
+#shut off Thonny navigation toolbar
+fig.canvas.toolbar.pack_forget()
+
+plt.axis('off')
+
+xs = []
+ys = []
+
+def get_location():
+    try:
+        response = requests.get('https://ipinfo.io/json')
+        data = response.json()
+        if 'loc' in data:
+            lat, lon = data['loc'].split(',')
+            return float(lat), float(lon)
+    except requests.exceptions.RequestException:
+        pass
+    return None
+
+def get_observation_site(latitude, longitude):
+    nws_url = generate_nws_url(latitude, longitude, observation_site='')
+    nearest_html = requests.get(nws_url)
+    nearest_soup = BeautifulSoup(nearest_html.content, 'html.parser')
+    panel_title = nearest_soup.find('h2', class_='panel-title')
+    if panel_title:
+        observation_site = panel_title.text.strip()
+        return observation_site
+    else:
+        return "Observation site not found"
+
+def generate_nws_url(latitude, longitude, observation_site=''):
+    nws_url = f"https://forecast.weather.gov/MapClick.php?lon={longitude}&lat={latitude}"
+    if observation_site:
+        nws_url += f"&site={observation_site}"
+    return nws_url
+
+# Example usage
+location = get_location()
+if location is not None:
+    latitude, longitude = location
+    observation_site = get_observation_site(latitude, longitude)
+    print("Observation Site:", observation_site)
+
+    nws_url = generate_nws_url(latitude, longitude, observation_site=observation_site)
+
+    nearest_html = requests.get(nws_url)
+    nearest_soup = BeautifulSoup(nearest_html.content, 'html.parser')
+    nearest_baro = nearest_soup.find(id='current_conditions_detail')('td')[5]
+    baro_input = nearest_baro.string
+    baro_input = float(baro_input[:5])
+    print(baro_input)
+
+else:
+    print("Failed to retrieve location.")
+    
+    def start_input(prompt):
+        while True:
+            baro_input = input(prompt)
+            if re.match("^(28|29|30|31)\.\d{2}$", baro_input):
+                return float(baro_input)
+            else:
+                print("Invalid input. Please enter a value between 28 and 31 with exactly two decimal places.")
+
+    # Example usage
+    input_prompt = "Enter current barometric pressure in inches of mercury from nearest National Weather Service in this format xx.xx, then press ENTER: "
+    baro_input = start_input(input_prompt)
+    #print("You entered:", baro_input)
+    correction_factor = 1.0
+# This function is called periodically from FuncAnimation
+def animate(i, xs, ys):
+    global correction_factor
+    global cycle_counter, frame_index #added while trying to display looping radar
+    # Get I2C bus
+    bus = smbus.SMBus(1)
+    
+    # HP203B address, 0x77(118)
+    # Send OSR and channel setting command, 0x44(68)
+    bus.write_byte(0x77, 0x44 | 0x00)
+
+    time.sleep(0.5)
+
+    # HP203B address, 0x77(118)
+    # Read data back from 0x10(16), 6 bytes
+    # cTemp MSB, cTemp CSB, cTemp LSB, pressure MSB, pressure CSB, pressure LSB
+    data = bus.read_i2c_block_data(0x77, 0x10, 6)
+
+    # Convert the data to 20-bits
+    # Correct for 160 feet above sea level
+    # cpressure is pressure corrected for elevation
+    cTemp = (((data[0] & 0x0F) * 65536) + (data[1] * 256) + data[2]) / 100.00
+    fTemp = (cTemp * 1.8) + 32
+    pressure = (((data[3] & 0x0F) * 65536) + (data[4] * 256) + data[5]) / 100.00
+    cpressure = (pressure * 1.0058)
+    inHg = (cpressure * .029529)
+    #print (inHg)
+    if i < 1:
+        
+        correction_factor = (baro_input/inHg)
+        
+    inHg = correction_factor * inHg
+    #print (baro_input, correction_factor, inHg)
+
+    # HP203B address, 0x77(118)
+    # Send OSR and channel setting command, 0x44(68)
+    bus.write_byte(0x77, 0x44 | 0x01)
+
+    time.sleep(0.5)
+
+    # HP203B address, 0x76(118)
+    # Read data back from 0x31(49), 3 bytes
+    # altitude MSB, altitude CSB, altitude LSB
+    data = bus.read_i2c_block_data(0x77, 0x31, 3)
+
+    # Convert the data to 20-bits
+    altitude = (((data[0] & 0x0F) * 65536) + (data[1] * 256) + data[2]) / 100.00
+    
+    if i > 1:
+                
+        plt.savefig('baro_trace.png')
+        
+        ax.clear()
+        bx.clear()
+        
+        # Adjust margins
+        fig.subplots_adjust(left=0.125, right=0.90, bottom=0, top=0.88)
+        
+        try:
+            global ptemp, pwind, mtemp, mwind, bat, owt, bwind
+            
+            ax.text(.80, 1.09, "Portland",
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=12)
+    
+            ax.text(.80, 1.05, ptemp,
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=12)
+ 
+            ax.text(.80, 1.01, pwind,
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=12)
+    
+        except Exception as e:
+            print( "First of Portland obs", e)
+            pass
+    
+        try:
+        
+            ax.text(.40, 1.09, "Mt. Washington",
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=12)
+    
+            ax.text(.40, 1.05, mtemp,
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=12)
+ 
+            ax.text(.40, 1.01, mwind,
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=12)
+        
+        except Exception as e:
+            print("First of Mt. Washington Obs", e)
+            pass
+
+        try:
+            ax.text(0, 1.1, "Buoy 44007",
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=9)
+        
+            ax.text(0, 1.07, bat,
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=9)
+
+            ax.text(0, 1.04, owt,
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=9)
+        
+            ax.text(0, 1.01, bwind,
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=9)
+        
+        except Exception as e:
+            print("First of buoy obs", e)
+            pass
+               
+        # Display the regional composite radar image in the subplot
+        try:           
+            # Scrape and save the regional composite radar image
+            radar_url = 'https://radar.weather.gov/ridge/standard/NORTHEAST_0.gif'
+            radar_response = requests.get(radar_url)
+            radar_content = radar_response.content
+            radar_image = Image.open(BytesIO(radar_content))
+            radar_image.save('radar.png', 'PNG')            
+            
+            if radar_response.status_code == 200:
+                radar_image = Image.open('radar.png')
+                bx.imshow(radar_image)
+                ax.axis('off')
+                bx.axis('off')
+                plt.draw()
+                plt.pause(7)            
+            else:            
+                pass
+        except Exception as e:
+            print("Scrape, save and Display regional radar", e)
+            pass
+        
+        # Scrape, Save and Display GYX radar in the subplot
+        try:          
+            gif_url = "https://radar.weather.gov/ridge/standard/KGYX_loop.gif"
+
+            # Scrape and save the radar GIF
+            response = requests.get(gif_url)
+            if response.status_code == 200:
+                with open('radar.gif', 'wb') as f:
+                    f.write(response.content)
+
+            # Open the radar GIF and extract frames
+            radar_gif = Image.open('radar.gif')
+            frames = []
+            try:
+                while True:
+                    frames.append(radar_gif.copy())
+                    radar_gif.seek(len(frames))  # Move to the next frame
+            except EOFError:
+                pass
+
+            # Zoom parameters
+            zoom_factor = 2  # Increase the size by 2 times
+
+            # Display the zoomed frames in a loop, cycling 2 times
+            num_cycles = 2
+            for _ in range(num_cycles):
+                for frame in frames:
+                    width, height = frame.size
+                    left = (width / 4) - 150  # adjust to zoom in further west
+                    top = (height / 4) + 70  # adjust to zoom in further south
+                    right = 3 * (width / 4) + 102  # adjust to zoom in further east
+                    bottom = 3 * (height / 4) + 138  # adjust to zoom in further north
+                    cropped_frame = frame.crop((left, top, right, bottom))
+                    zoomed_frame = cropped_frame.resize((zoom_factor * cropped_frame.width, zoom_factor * cropped_frame.height))
+                    bx.imshow(zoomed_frame)
+                    plt.draw()
+                    plt.pause(0.01)  # Pause for a short duration between frames
+        except Exception as e:
+            print("Scrape, Save and Display local radar", e)
+            pass
+                      
+        # Scrape, Save and Display the satellite image in the subplot
+        try:
+            satellite_url = 'https://cdn.star.nesdis.noaa.gov/GOES16/ABI/SECTOR/eus/GEOCOLOR/1000x1000.jpg'
+            satellite_response = requests.get(satellite_url)
+            satellite_content = satellite_response.content
+            satellite_image = Image.open(BytesIO(satellite_content))
+            satellite_image.save('satellite.png', 'PNG')
+            
+            if satellite_response.status_code == 200:                        
+                satellite_image = Image.open('satellite.png')
+                bx.imshow(satellite_image, aspect='equal')
+                ax.axis('off')
+                bx.axis('off')
+                plt.draw()
+                plt.pause(7)
+            else:
+                pass
+        except Exception as e:
+            print("Scrape, Save and Display satellite image", e)
+            pass        
+        
+        # Scrape, Save and Display the surface analysis in the subplot
+        try:           
+            sfc_url = 'https://www.wpc.ncep.noaa.gov/basicwx/92fndfd.gif'
+            sfc_response = requests.get(sfc_url)
+            sfc_content = sfc_response.content        
+            sfc_image = Image.open(BytesIO(sfc_content))
+            sfc_image.save('sfc.png', 'PNG')
+        
+            if sfc_response.status_code == 200:           
+                sfc_image = Image.open('sfc.png')
+                bx.imshow(sfc_image)
+                ax.axis('off')
+                bx.axis('off')
+                plt.draw()
+                plt.pause(7)
+                bx.clear()
+            else:
+                pass
+        except Exception as e:
+            print("Scrape, Save and Display sfc analysis", e)
+            pass
+        
+        # Scrape, Save and Display the GYX sounding in the subplot
+        try:
+            # Get current UTC time and date
+            scrape_now = datetime.utcnow()
+
+            if scrape_now.hour >= 1 and scrape_now.hour < 13:
+                # Use 00z for current UTC date
+                date_str = scrape_now.strftime("%y%m%d00")
+                hour_str = "00Z"
+            else:
+                # Use 12z for current UTC date
+                hour_str = "12Z"
+                date_str = scrape_now.strftime("%y%m%d12")
+                if scrape_now.hour < 1:
+                    # Use previous UTC date for 00z images
+                    scrape_now -= timedelta(days=1)
+                    date_str = scrape_now.strftime("%y%m%d12")
+                    
+            month_str = scrape_now.strftime("%b").capitalize()
+            day_str = str(scrape_now.day)
+
+            # Construct image URL
+            sound_url = f"https://www.spc.noaa.gov/exper/soundings/{date_str}_OBS/GYX.gif"
+
+            # Send a GET request to the image URL to get the image content
+            sound_response = requests.get(sound_url)
+
+            # Save the image using Pillow
+            sound_img = Image.open(BytesIO(sound_response.content))
+            
+            # Crop the top 50 pixels from the image
+            crop_box = (0, 250, sound_img.width, sound_img.height)
+            sound_img = sound_img.crop(crop_box)
+            
+            sound_img.save('sound.png', 'PNG')
+                
+        except Exception as e:
+            print("Sounding", e)
+            pass
+        
+            # Pause for 2 seconds include this time when showing baro
+            plt.pause(2) 
+            if sound_response.status_code == 200:
+                sound_img = Image.open('sound.png')
+                
+                # Calculate the aspect ratio of the image               
+                sound_img = sound_img.convert('RGBA')
+                aspect_ratio = sound_img.width / sound_img.height
+
+                # Set the size of the displayed image to 8 inches by 8 inches
+                display_width = 0.83
+                display_height = 1
+
+                # Calculate the extent of the displayed image
+                display_extent = [0, display_width, 0, display_height / aspect_ratio]
+
+                # Create a new image with a white background
+                sound_img_with_white_bg = Image.new('RGBA', (int(sound_img.width), int(sound_img.height)), (255, 255, 255, 255))
+                sound_img_with_white_bg.paste(sound_img, (0, 0), sound_img)
+
+                sound_img_with_white_bg.save('sound_img.png', 'PNG')
+
+                # Display the image with the adjusted extent
+                bx.imshow(sound_img_with_white_bg, extent=display_extent)
+           
+                # Add the text to the subplot
+                bx.text(0.37, 0.9, f'{month_str} {day_str} {hour_str}', ha='center', va='center', transform=bx.transAxes)
+            
+                ax.axis('off')
+                bx.axis('off')
+                plt.draw()
+                plt.pause(13)
+            else:
+                pass
+        except Exception as e:
+            print("Scrape, Save and Display sounding", e)
+            pass
+                   
+        bx.clear()
+        bx.axis('off')
+        
+        # Set custom margins
+        fig.subplots_adjust(left=0.125, right=0.9, bottom=0.11, top=0.88)
+
+    else:
+        pass
+  
+    try:        
+        
+        #Scrape for buoy data
+        url = "https://www.ndbc.noaa.gov/station_page.php?station=44007"        
+        html = requests.get(url)# requests instance    
+        time.sleep(5)    
+        soup = BeautifulSoup(html.text,'html.parser')   
+        
+        bwd = soup.find(class_="dataTable").find_all('td')[0]
+        bwd = bwd.string.split()[0]
+        if bwd == "-":
+            bwd = "Calm"
+        
+        bws = soup.find(class_="dataTable").find_all('td')[1]
+        bws = float(bws.string) * 1.15078
+        bws = round(bws)
+        bws = " at {} mph".format(bws)
+
+        bwg = soup.find(class_="dataTable").find_all('td')[2]
+        bwg = round(float(bwg.string) * 1.15078)
+        bwg = " G{}".format(bwg)
+
+        bwind = bwd + bws + bwg
+        
+        owt = soup.find(class_="dataTable")
+        owt = owt.find_all('td')[10]
+        owt = owt.string
+        
+        if not "-" in owt:
+            owt = "Water Temp: " + str(round(float(owt.string))) + chr(176)
+            
+        else:
+            owt = "Water Temp: -"
+            pass
+        bat = soup.find(class_="dataTable")
+        bat = bat.find_all('td')[9]
+        bat = "Air Temp: " + str(round(float(bat.string))) + chr(176)
+                      
+    except Exception as e:
+        print("Scrape buoy data", e)
+        pass
+
+    #Get PWM temp and wind direction and speed scraped from NWS site
+    
+    purl = 'https://forecast.weather.gov/MapClick.php?lon=-70.2685546875&lat=43.65177365401155'
+
+    try:        
+        # Send a GET request to the website and store the response in a variable
+        phtml = requests.get(purl)
+
+        # Parse the HTML content of the website using BeautifulSoup
+        psoup = BeautifulSoup(phtml.content, 'html.parser')
+
+        # Find the current temperature, wind direction, and wind speed
+        ptemp = psoup.find('p', class_='myforecast-current-lrg').text
+        ptemp = ptemp[:-1]
+
+        pwind = psoup.find(id='current_conditions_detail')('td')[3]
+        pwind = pwind.string
+        
+    except Exception as e:
+        print("Scrape PWM data", e)
+        pass
+   
+    #Get MWN temp wind direction and speed from API (no…isn’t this scraped?)
+    
+    murl = "https://w1.weather.gov/data/obhistory/KMWN.html"
+    try:
+        mhtml = requests.get(murl)# requests instance        
+        msoup = BeautifulSoup(mhtml.text,'html.parser')
+
+        mwindraw = msoup.find_all("td")[10]
+        mwindraw = mwindraw.string
+        mwd = mwindraw.split(" ", 3)[0]
+        mws = mwindraw.split(" ", 3)[1]
+        if "G" in mwindraw:
+            mwg = mwindraw.split(" ",3)[3]
+            mwg = "G" + mwg
+        else:
+            mwg = ""
+
+        mwind = mwd + " at " + mws + " mph " + mwg
+
+        mtemp = msoup.find_all("td")[14]
+        mtemp = mtemp.string
+        if mtemp == "-0":
+            mtemp = "0"
+        else:
+            mtemp = mtemp
+        mtemp = mtemp + chr(176)
+         
+    except Exception as e:
+        print("Scrape MWN data", e)
+        
+        pass
+    
+    # Get time stamp
+    now = datetime.now() # current date and time
+    year = now.strftime("%Y")
+    month = now.strftime("%m")
+    day = now.strftime("%d")
+    time_str = now.strftime("%H:%M:%S")
+    hourmin_str = now.strftime("%H:%M")
+    hms = now.strftime("%H:%M:%S")
+    day = now.strftime("%A")
+           
+    date_time = now.strftime("%m/%d/%Y, %H:%M:%S")
+    date_time = pd.to_datetime(date_time) #allows us to label x-axis
+
+    now = datetime.now() # current date and time
+    time_delta = dt.timedelta(minutes=4200)
+    start_time = now - time_delta
+
+    #sec = now.strftime("%S")
+    
+    # Set axis limits and labels
+    ax.set_xlim(start_time, now)
+    
+    dtext=date_time
+    #Build xs and ys arrays
+       
+    xs.append(date_time)
+    ys.append(inHg)
+    
+    #Limit x and y lists to 20 items
+    xs = xs[-4200:] #Adjust this neg number to how many obs plotted in one window
+    ys = ys[-4200:] #At a rate of 1 plot/min for 24 hours change this to 1440
+    #Draw x and y lists
+
+    ax.clear() 
+    ax.plot(xs, ys, 'r-')
+    try:
+        ax.text(.80, 1.09, "Portland",
+            transform=ax.transAxes,
+            fontweight='bold', horizontalalignment='left', fontsize=12)
+    
+        ax.text(.80, 1.05, ptemp,
+            transform=ax.transAxes,
+            fontweight='bold', horizontalalignment='left', fontsize=12)
+ 
+        ax.text(.80, 1.01, pwind,
+            transform=ax.transAxes,
+            fontweight='bold', horizontalalignment='left', fontsize=12)
+    
+    except Exception as e:
+        print("2nd print of PWM data", e)
+        pass
+    
+    try:
+        
+        ax.text(.40, 1.09, "Mt. Washington",
+            transform=ax.transAxes,
+            fontweight='bold', horizontalalignment='left', fontsize=12)
+    
+        ax.text(.40, 1.05, mtemp,
+            transform=ax.transAxes,
+            fontweight='bold', horizontalalignment='left', fontsize=12)
+ 
+        ax.text(.40, 1.01, mwind,
+            transform=ax.transAxes,
+            fontweight='bold', horizontalalignment='left', fontsize=12)
+        
+    except Exception as e:
+        print("2nd print of MWN data", e)
+        pass
+
+    try:
+        ax.text(0, 1.1, "Buoy 44007",
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=9)
+        
+        ax.text(0, 1.07, bat,
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=9)
+
+        ax.text(0, 1.04, owt,
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=9)
+        
+        ax.text(0, 1.01, bwind,
+                transform=ax.transAxes,
+                fontweight='bold', horizontalalignment='left', fontsize=9)
+        
+    except Exception as e:
+        print("2nd print of buoy data", e)
+        pass
+ 
+    #set up background colors
+    gold = 30.75
+    yellow = 30.35
+    white = 30.00
+    gainsboro = 29.65
+    darkgrey = 29.25
+        
+    ax.axhline(gold, color='gold', lw=77, alpha=.5)
+    ax.axhline(yellow, color='yellow', lw=46, alpha=.2)
+    ax.axhline(white, color='white', lw=40, alpha=.2)
+    ax.axhline(gainsboro, color='gainsboro', lw=46, alpha=.5)    
+    ax.axhline(darkgrey, color='darkgrey', lw=77, alpha=.5)
+    
+    #Lines on minor ticks
+    for t in np.arange(29, 31, 0.05):
+        ax.axhline(t, color='black', lw=.5, alpha=.2)
+    for u in np.arange(29, 31, 0.25):
+        ax.axhline(u, color='black', lw=.7)
+        
+    ax.tick_params(axis='x', direction='inout', length=5, width=1, color='black')
+    
+    ax.set_ylim(29, 31)
+    
+    ax.plot(xs, ys, 'r-')
+    plt.grid(True, color='.01',) #Draws default horiz and vert grid lines
+    plt.ylabel("Inches of Mercury")
+    #plt.title("Barometric Pressure")
+      
+    ax.yaxis.set_minor_locator(AutoMinorLocator(5)) #Puts small ticks between labeled ticks
+    ax.yaxis.set_major_formatter(FormatStrFormatter('%2.2f'))
+    # disable removing overlapping locations
+    ax.xaxis.remove_overlapping_locs = False
+    print(i)
+    
+    ax.xaxis.set(
+    major_locator=mdates.HourLocator((0,4,8,12,16,20)),
+    major_formatter=mdates.DateFormatter('%-I%P'),
+    minor_locator=mdates.DayLocator(),
+    minor_formatter=mdates.DateFormatter("\n%a,%-m/%-d"),
+)
+    ax.set_xlim(dt.datetime.now() - dt.timedelta(minutes=4200), dt.datetime.now())
+    #this line seems responsible for vertical lines
+    ax.grid(which='major', axis='both', linestyle='-', linewidth=1, color='black', alpha=1, zorder=10)
+    plt.show(block=False)
+    
+# Set up plot to call animate() function periodically
+ani = animation.FuncAnimation(fig, animate, fargs=(xs, ys), interval=3000, save_count=len(xs))
+ani.save('animation.gif', writer='pillow')
