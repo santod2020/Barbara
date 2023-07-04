@@ -390,8 +390,6 @@ def animate(i, xs, ys):
                 sound_img_with_white_bg.save('sound_img.png', 'PNG')
 
                 # Display the image with the adjusted extent
-                ax.axis('off')
-                bx.axis('off') 
                 bx.imshow(sound_img_with_white_bg, extent=display_extent)
            
                 # Add the text to the subplot
