@@ -5,6 +5,7 @@
 # use location for nearest NWS and scrape latest baro reading to get correction factor
 # looping local radar
 # Prints out the locaton of determined nearest obs site and current baro
+# AutoPypi on Barbara 7-3-23
 
 import smbus
 import requests
